@@ -18,23 +18,20 @@ Data sources (RunSignup API):
       GET https://api.runsignup.com/rest/race/:race_id
 
 Auth:
-  - Supports OAuth2 Bearer tokens (preferred):
-      Set RUNSIGNUP_ACCESS_TOKEN and it will send:
-        Authorization: Bearer <token>
-  - Optional legacy fallback (query params):
+  - Requires RunSignup API key + secret, sent as query params:
+      api_key=...&api_secret=...
+  - Store in environment variables:
       RUNSIGNUP_API_KEY, RUNSIGNUP_API_SECRET
 
-Example usage (OAuth2):
-  export RUNSIGNUP_ACCESS_TOKEN="eyJ...."
+Example usage:
+  export RUNSIGNUP_API_KEY="xxx"
+  export RUNSIGNUP_API_SECRET="yyy"
 
+  # Grab result sets updated in the last 14 days, sample first 50 result sets
   python runsignup_5k_splits_scraper.py \
     --days-back 14 \
     --max-result-sets 50 \
     --out results_5k_splits.csv
-
-Example usage (legacy fallback):
-  export RUNSIGNUP_API_KEY="xxx"
-  export RUNSIGNUP_API_SECRET="yyy"
 
 Notes:
   - Many result sets will not be 5K, and many 5Ks won't have mile splits.
@@ -43,7 +40,7 @@ Notes:
       - event_type equals/contains "5K" OR
       - distance is close to 5.0 km (if provided)
   - Split mapping:
-      - Results payload includes dynamic fields named like split-<id>
+      - Results payload includes dynamic fields named like split-<number>
       - We call result-set-splits to determine which split corresponds to Mile 1/2/3
       - If distance metadata is missing, fall back to split name matching ("Mile 1", "1 Mile", etc.)
 
@@ -83,7 +80,6 @@ GET_RACE_PATH = "/race/{race_id}"
 
 _TIME_RE = re.compile(r"^\s*(?:(\d+):)?(\d{1,2}):(\d{2})(?:\.\d+)?\s*$")  # [H:]MM:SS(.ms)
 
-
 def time_str_to_seconds(s: str) -> Optional[int]:
     """
     Convert time strings like:
@@ -109,43 +105,24 @@ def time_str_to_seconds(s: str) -> Optional[int]:
 
 
 # ----------------------------
-# HTTP client (OAuth2 + legacy fallback)
+# HTTP client
 # ----------------------------
 
 @dataclass
 class RunSignupClient:
-    # OAuth2 (preferred)
-    access_token: Optional[str] = None
-
-    # Legacy fallback
-    api_key: Optional[str] = None
-    api_secret: Optional[str] = None
-
+    api_key: str
+    api_secret: str
     timeout_s: int = 30
     sleep_s: float = 0.15  # gentle pacing
 
     def _get(self, path: str, params: Dict[str, Any]) -> Dict[str, Any]:
         url = BASE_URL + path
-
         qp = dict(params)
+        qp["api_key"] = self.api_key
+        qp["api_secret"] = self.api_secret
         qp.setdefault("format", "json")
 
-        headers: Dict[str, str] = {}
-
-        # Prefer OAuth2 Bearer token if provided
-        if self.access_token:
-            headers["Authorization"] = f"Bearer {self.access_token}"
-        else:
-            # Fallback to legacy key/secret if provided
-            if not self.api_key or not self.api_secret:
-                raise RuntimeError(
-                    "Missing auth. Set RUNSIGNUP_ACCESS_TOKEN (OAuth2) "
-                    "or RUNSIGNUP_API_KEY and RUNSIGNUP_API_SECRET (legacy)."
-                )
-            qp["api_key"] = self.api_key
-            qp["api_secret"] = self.api_secret
-
-        resp = requests.get(url, params=qp, headers=headers, timeout=self.timeout_s)
+        resp = requests.get(url, params=qp, timeout=self.timeout_s)
         if resp.status_code != 200:
             raise RuntimeError(f"HTTP {resp.status_code} for {url}: {resp.text[:500]}")
 
@@ -219,7 +196,6 @@ class RunSignupClient:
 def safe_lower(x: Any) -> str:
     return str(x or "").lower()
 
-
 def looks_like_5k_event(event: Dict[str, Any]) -> bool:
     """
     Heuristics to decide if an event is a 5K.
@@ -251,21 +227,17 @@ def looks_like_5k_event(event: Dict[str, Any]) -> bool:
 
     return False
 
-
 def extract_event_name(event: Dict[str, Any]) -> str:
     return str(event.get("name") or event.get("event_name") or "").strip()
-
 
 def find_event_by_id(race_payload: Dict[str, Any], event_id: int) -> Optional[Dict[str, Any]]:
     """
     Race response structure can vary. Common patterns:
       - {"race": {"events": [{"event_id": ...}, ...]}}
-      - {"race": {"events": [{"event": {...}}]}}   <-- wrapper
       - {"race": {"event": [...]}}
       - {"events": [...]}
     """
-    candidates: List[Any] = []
-
+    candidates = []
     if isinstance(race_payload, dict):
         if "race" in race_payload and isinstance(race_payload["race"], dict):
             r = race_payload["race"]
@@ -277,20 +249,12 @@ def find_event_by_id(race_payload: Dict[str, Any], event_id: int) -> Optional[Di
                 candidates.extend(race_payload[key])
 
     for e in candidates:
-        if not isinstance(e, dict):
-            continue
-
-        # unwrap {"event": {...}} pattern if present
-        e2 = e.get("event") if isinstance(e.get("event"), dict) else e
-
         try:
-            if int(e2.get("event_id") or e2.get("id")) == int(event_id):
-                return e2
+            if int(e.get("event_id") or e.get("id")) == int(event_id):
+                return e
         except Exception:
             continue
-
     return None
-
 
 def iter_results_from_get_results(payload: Dict[str, Any]) -> Iterable[Tuple[Dict[str, Any], Dict[str, Any]]]:
     """
@@ -307,27 +271,33 @@ def iter_results_from_get_results(payload: Dict[str, Any]) -> Iterable[Tuple[Dic
                 if isinstance(row, dict):
                     yield rs, row
 
-
 def parse_splits_response(payload: Dict[str, Any]) -> List[Dict[str, Any]]:
     """
-    Find a list-like field that contains dict splits.
+    The "Get Splits for Result Sets" endpoint docs don’t fully spell out the schema in the HTML view,
+    and it can vary. We defensively search for a list-like field that contains dict splits.
+
+    We return a list of dicts, where each dict is one split definition (as provided by the API).
     """
     if not isinstance(payload, dict):
         return []
 
-    for key in ("splits", "result_set_splits", "result_sets_splits", "result_set_split"):
+    # common-ish keys
+    for key in ("splits", "result_set_splits", "result_sets_splits", "result_set_split", "result_set_splits"):
         v = payload.get(key)
         if isinstance(v, list) and all(isinstance(x, dict) for x in v):
             return v
 
+    # fall back: first list-of-dicts in the payload
     for v in payload.values():
         if isinstance(v, list) and v and all(isinstance(x, dict) for x in v):
             return v
 
     return []
 
-
 def split_def_id(split_def: Dict[str, Any]) -> Optional[int]:
+    """
+    Try multiple likely keys for split ID. We need this ID because result rows contain fields like "split-<id>".
+    """
     for k in ("split_id", "result_set_split_id", "individual_result_set_split_id", "id"):
         if k in split_def:
             try:
@@ -336,15 +306,16 @@ def split_def_id(split_def: Dict[str, Any]) -> Optional[int]:
                 continue
     return None
 
-
 def split_def_name(split_def: Dict[str, Any]) -> str:
     for k in ("name", "split_name", "label", "display_name"):
         if k in split_def and split_def[k]:
             return str(split_def[k])
     return ""
 
-
 def split_def_distance(split_def: Dict[str, Any]) -> Tuple[Optional[float], str]:
+    """
+    Attempt to get distance + unit for a split.
+    """
     dist = None
     unit = ""
     for dk in ("distance", "split_distance", "dist"):
@@ -360,8 +331,16 @@ def split_def_distance(split_def: Dict[str, Any]) -> Tuple[Optional[float], str]
             break
     return dist, unit
 
-
 def map_mile_splits(split_defs: List[Dict[str, Any]]) -> Dict[int, int]:
+    """
+    Return a mapping:
+      mile_number -> split_id
+
+    Strategy:
+      1) If distance metadata exists, prefer splits near 1.0 / 2.0 / 3.0 miles
+      2) Else use name matching like "Mile 1", "1 Mile", etc.
+    """
+    # Collect candidates
     entries = []
     for sd in split_defs:
         sid = split_def_id(sd)
@@ -373,8 +352,10 @@ def map_mile_splits(split_defs: List[Dict[str, Any]]) -> Dict[int, int]:
 
     mile_map: Dict[int, int] = {}
 
+    # 1) distance-based matching
+    # We accept either miles or kilometers; if km, convert to miles.
     for target_mile in (1, 2, 3):
-        best = None
+        best = None  # (abs_error, split_id)
         for sid, name, dist, unit in entries:
             if dist is None:
                 continue
@@ -387,13 +368,14 @@ def map_mile_splits(split_defs: List[Dict[str, Any]]) -> Dict[int, int]:
                 continue
 
             err = abs(miles - float(target_mile))
-            if err <= 0.12:
+            if err <= 0.12:  # ~0.12 mi tolerance (~200m)
                 if best is None or err < best[0]:
                     best = (err, sid)
 
         if best is not None:
             mile_map[target_mile] = best[1]
 
+    # 2) name-based fallback for missing ones
     if len(mile_map) < 3:
         for target_mile in (1, 2, 3):
             if target_mile in mile_map:
@@ -408,6 +390,11 @@ def map_mile_splits(split_defs: List[Dict[str, Any]]) -> Dict[int, int]:
 
 
 def extract_split_time(row: Dict[str, Any], split_id: int) -> Optional[str]:
+    """
+    In Get Event Results, split times appear as dynamic keys like:
+      "split-1", "split-2", ... or "split-12345"
+    We attempt both "split-<id>" and "split_<id>" just in case.
+    """
     for key in (f"split-{split_id}", f"split_{split_id}"):
         if key in row:
             v = row.get(key)
@@ -426,7 +413,6 @@ def unix_ts_days_ago(days: int) -> int:
     past = now - dt.timedelta(days=days)
     return int(past.timestamp())
 
-
 def pick_finish_time(row: Dict[str, Any]) -> Tuple[Optional[str], Optional[int]]:
     """
     Prefer chip_time if present, else clock_time.
@@ -438,10 +424,7 @@ def pick_finish_time(row: Dict[str, Any]) -> Tuple[Optional[str], Optional[int]]
         raw = str(chip).strip()
     elif clock and str(clock).strip() and str(clock).strip().upper() != "NONE":
         raw = str(clock).strip()
-
-    # FIX: avoid returning (None, None) as the seconds value
-    return raw, (time_str_to_seconds(raw) if raw else None)
-
+    return raw, time_str_to_seconds(raw) if raw else (None, None)
 
 def scrape(
     client: RunSignupClient,
@@ -456,6 +439,7 @@ def scrape(
 
     modified_since = unix_ts_days_ago(days_back)
 
+    # Pull updated result sets (paged)
     page = 1
     num_per_page = min(5000, max_result_sets) if max_result_sets > 0 else 5000
     seen = 0
@@ -481,25 +465,9 @@ def scrape(
             race_name = str(rs.get("race_name", "")).strip()
             result_set_name = str(rs.get("individual_result_set_name", "")).strip()
 
+            # Identify whether this event looks like a 5K by fetching the race and locating the event.
             try:
                 race_payload = client.get_race(race_id)
-
-                # DEBUG: show payload structure
-                if verbose:
-                    print(
-                        f"[DEBUG] race_id={race_id} top_keys={list(race_payload.keys())[:30]}",
-                        file=sys.stderr,
-                    )
-                    if "race" in race_payload and isinstance(race_payload["race"], dict):
-                        print(
-                            f"[DEBUG] race['keys']={list(race_payload['race'].keys())[:30]}",
-                            file=sys.stderr,
-                        )
-                    print(
-                        f"[DEBUG] race_payload snippet={str(race_payload)[:500]}",
-                        file=sys.stderr,
-                    )
-
                 event = find_event_by_id(race_payload, event_id) or {}
             except Exception as e:
                 if verbose:
@@ -509,34 +477,28 @@ def scrape(
             if not event or not looks_like_5k_event(event):
                 if verbose:
                     en = extract_event_name(event)
-                    print(
-                        f"[SKIP] Not 5K: race_id={race_id} event_id={event_id} event='{en}' race='{race_name}'",
-                        file=sys.stderr,
-                    )
+                    print(f"[SKIP] Not 5K: race_id={race_id} event_id={event_id} event='{en}' race='{race_name}'", file=sys.stderr)
                 continue
 
             event_name = extract_event_name(event)
 
+            # Fetch splits definitions to map split IDs to Mile 1/2/3
             try:
                 splits_payload = client.get_result_set_splits(race_id, event_id, result_set_id)
                 split_defs = parse_splits_response(splits_payload)
                 mile_to_split_id = map_mile_splits(split_defs)
             except Exception as e:
                 if verbose:
-                    print(
-                        f"[WARN] splits fetch/parse failed for race_id={race_id} event_id={event_id} rs_id={result_set_id}: {e}",
-                        file=sys.stderr,
-                    )
+                    print(f"[WARN] splits fetch/parse failed for race_id={race_id} event_id={event_id} rs_id={result_set_id}: {e}",
+                          file=sys.stderr)
                 continue
 
             if len(mile_to_split_id) == 0:
                 if verbose:
-                    print(
-                        f"[SKIP] No splits found: race_id={race_id} event_id={event_id} rs_id={result_set_id}",
-                        file=sys.stderr,
-                    )
+                    print(f"[SKIP] No splits found: race_id={race_id} event_id={event_id} rs_id={result_set_id}", file=sys.stderr)
                 continue
 
+            # Pull results pages
             for p in range(1, max_pages_per_result_set + 1):
                 try:
                     results_payload = client.get_event_results(
@@ -549,10 +511,8 @@ def scrape(
                     )
                 except Exception as e:
                     if verbose:
-                        print(
-                            f"[WARN] get_results failed race_id={race_id} event_id={event_id} rs_id={result_set_id} page={p}: {e}",
-                            file=sys.stderr,
-                        )
+                        print(f"[WARN] get_results failed race_id={race_id} event_id={event_id} rs_id={result_set_id} page={p}: {e}",
+                              file=sys.stderr)
                     break
 
                 any_rows = False
@@ -602,7 +562,7 @@ def scrape(
                     rows_out.append(out)
 
                 if not any_rows:
-                    break
+                    break  # no more pages
 
         page += 1
 
@@ -610,14 +570,21 @@ def scrape(
 
 
 def write_csv(path: str, rows: List[Dict[str, Any]]) -> None:
-    header = [
-        "race_id", "event_id", "individual_result_set_id",
-        "race_name", "event_name", "individual_result_set_name",
-        "result_id", "place", "gender", "age",
-        "finish_time_s", "mile1_s", "mile2_s", "mile3_s",
-        "finish_time_raw", "mile1_raw", "mile2_raw", "mile3_raw",
-    ]
+    if not rows:
+        # still write header for convenience
+        header = [
+            "race_id","event_id","individual_result_set_id",
+            "race_name","event_name","individual_result_set_name",
+            "result_id","place","gender","age",
+            "finish_time_s","mile1_s","mile2_s","mile3_s",
+            "finish_time_raw","mile1_raw","mile2_raw","mile3_raw",
+        ]
+        with open(path, "w", newline="", encoding="utf-8") as f:
+            w = csv.DictWriter(f, fieldnames=header)
+            w.writeheader()
+        return
 
+    header = list(rows[0].keys())
     with open(path, "w", newline="", encoding="utf-8") as f:
         w = csv.DictWriter(f, fieldnames=header)
         w.writeheader()
@@ -636,27 +603,19 @@ def main() -> int:
     parser.add_argument("--verbose", action="store_true", help="Print progress + skips to stderr.")
     args = parser.parse_args()
 
-    access_token = os.environ.get("RUNSIGNUP_ACCESS_TOKEN", "").strip()
     api_key = os.environ.get("RUNSIGNUP_API_KEY", "").strip()
     api_secret = os.environ.get("RUNSIGNUP_API_SECRET", "").strip()
-
-    if not access_token and (not api_key or not api_secret):
+    if not api_key or not api_secret:
         print(
             "ERROR: Missing API credentials.\n"
-            "Set either:\n"
-            "  RUNSIGNUP_ACCESS_TOKEN  (OAuth2 Bearer token)\n"
-            "OR (legacy fallback):\n"
+            "Set environment variables:\n"
             "  RUNSIGNUP_API_KEY\n"
             "  RUNSIGNUP_API_SECRET\n",
             file=sys.stderr,
         )
         return 2
 
-    client = RunSignupClient(
-        access_token=access_token or None,
-        api_key=api_key or None,
-        api_secret=api_secret or None,
-    )
+    client = RunSignupClient(api_key=api_key, api_secret=api_secret)
 
     rows = scrape(
         client=client,
