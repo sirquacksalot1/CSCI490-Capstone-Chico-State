@@ -496,6 +496,8 @@ def scrape(
             if len(mile_to_split_id) == 0:
                 if verbose:
                     print(f"[SKIP] No splits found: race_id={race_id} event_id={event_id} rs_id={result_set_id}", file=sys.stderr)
+                #mile_to_split_id = {} 
+                #allow results for now, for testing
                 continue
 
             # Pull results pages
