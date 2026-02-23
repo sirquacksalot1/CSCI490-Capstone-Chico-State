@@ -1,0 +1,8 @@
+export RUNSIGNUP_API_KEY="Q1sds9HFYA4G9wmqYqV6CJAsKeninDYeA"
+export RUNSIGNUP_API_SECRET="u572DrVXSMWnhNsaYGRB1rjpy1SK0wPp"
+python3 runsignup_1mile_splits_scraper.py \
+  --days-back 3650 \
+  --max-result-sets 200 \
+  --out runsignup_1mile_debug.csv \
+#  --verbose
+

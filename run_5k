@@ -1,0 +1,7 @@
+export RUNSIGNUP_API_KEY="Q1sds9HFYA4G9wmqYqV6CJAsKeninDYeA"
+export RUNSIGNUP_API_SECRET="u572DrVXSMWnhNsaYGRB1rjpy1SK0wPp"
+python3 runsignup_5k_splits_scraper.py \
+  --days-back 30 \
+  --max-result-sets 200 \
+  --out runsignup_5k_debug.csv \
+  --verbose
