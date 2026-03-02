@@ -1,6 +1,7 @@
 # Documentation for CSCI490 Capstone
 
-#Helpful commands
-	- 'python -m venv venv' create virtual enviroment
-	- 'source venv/bin/activate' activate enviroment
-	- 'pip install -r requirements.txt' install required versions
+## Helpful Commands
+
+- `python -m venv venv` — Create virtual environment  
+- `source venv/bin/activate` — Activate virtual environment  
+- `pip install -r requirements.txt` — Install required dependencies
