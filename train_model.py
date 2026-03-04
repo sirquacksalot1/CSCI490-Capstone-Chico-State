@@ -9,7 +9,7 @@ from sklearn.preprocessing import StandardScaler
 import matplotlib.pyplot as plt
 
 # Load
-df = pd.read_csv("training_matrix_full.csv")
+df = pd.read_csv("finish_time_with_splits.csv")
 
 #Drop potenital missing rows
 df = df.dropna()
@@ -20,7 +20,7 @@ df["5000_finish_s"] = pd.to_numeric(df["5000_finish_s"], errors="coerce")
 #DEBUG drop rows where conversion fails
 df = df.dropna(subset=["5000_finish_s"])
 
-X = df[["1500_finish_s", "3000_finish_s"]].astype("float32").values
+X = df[["mile1_s", "mile2_s", "mile3_s"]].astype("float32").values
 y = df["5000_finish_s"].astype("float32").values
 #Train / Test
 
@@ -36,7 +36,8 @@ X_test = scaler.transform(X_test)
 #Build Neural Network
 
 model = models.Sequential([
-    layers.Dense(16, activation='relu', input_shape=(2,)),
+	layers.Input(shape=(3,)),
+    layers.Dense(32, activation='relu'),
     layers.Dense(16, activation='relu'),
     layers.Dense(1)
 ])
