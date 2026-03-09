@@ -105,5 +105,5 @@ df_out["5000_finish_s"] = finish_s
 
 df_out.to_csv("finish_time_with_splits.csv", index=False)
 
-print("Saved realistic synthetic dataset.")
+print("Saved as finish_time_with_splits.csv")
 print(df_out[["mile1_s","mile2_s","mile3_s","5000_finish_s"]].head())
