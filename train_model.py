@@ -9,19 +9,21 @@ from sklearn.preprocessing import StandardScaler
 import matplotlib.pyplot as plt
 
 # Load
-df = pd.read_csv("finish_time_with_splits.csv")
+
+df = pd.read_csv("LapSplits_5k_clean.csv")
 
 #Drop potenital missing rows
-df = df.dropna()
+needed_cols = ["1000_split", "2000_split", "3000_split", "4000_split", "ResultTime"]
+df = df.dropna(subset=needed_cols)
 
 #Inputs / Output
-df["5000_finish_s"] = pd.to_numeric(df["5000_finish_s"], errors="coerce")
+df["ResultTime"] = pd.to_numeric(df["ResultTime"], errors="coerce")
 
 #DEBUG drop rows where conversion fails
-df = df.dropna(subset=["5000_finish_s"])
+df = df.dropna(subset=["ResultTime"])
 
-X = df[["mile1_s", "mile2_s", "mile3_s"]].astype("float32").values
-y = df["5000_finish_s"].astype("float32").values
+X = df[["1000_split", "2000_split", "3000_split", "4000_split"]].astype("float32").values
+y = df["ResultTime"].astype("float32").values
 #Train / Test
 
 X_train, X_test, y_train, y_test = train_test_split(
@@ -36,7 +38,7 @@ X_test = scaler.transform(X_test)
 #Build Neural Network
 
 model = models.Sequential([
-	layers.Input(shape=(3,)),
+	layers.Input(shape=(4,)),
     layers.Dense(32, activation='relu'),
     layers.Dense(16, activation='relu'),
     layers.Dense(1)
