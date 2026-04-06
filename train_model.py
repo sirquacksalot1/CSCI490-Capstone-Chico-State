@@ -7,6 +7,8 @@ from tensorflow.keras import layers, models
 from sklearn.model_selection import train_test_split
 from sklearn.preprocessing import StandardScaler
 import matplotlib.pyplot as plt
+import joblib
+
 
 # Load
 
@@ -35,11 +37,17 @@ scaler = StandardScaler()
 X_train = scaler.fit_transform(X_train)
 X_test = scaler.transform(X_test)
 
+joblib.dump(scaler, "5k_scaler.pkl")
+
+#Move from Sequential to Recurrent Neural Network
+X_train = X_train.reshape((X_train.shape[0], 4, 1))
+X_test = X_test.reshape((X_test.shape[0], 4, 1))
+
 #Build Neural Network
 
 model = models.Sequential([
-	layers.Input(shape=(4,)),
-    layers.Dense(32, activation='relu'),
+	layers.Input(shape=(4, 1)),
+    layers.LSTM(32),
     layers.Dense(16, activation='relu'),
     layers.Dense(1)
 ])
@@ -58,7 +66,7 @@ history = model.fit(
     X_train,
     y_train,
     validation_split=0.3,
-    epochs=100,
+    epochs=200,
     batch_size=16,
     verbose=1
 )
@@ -80,6 +88,6 @@ plt.title("Training vs Validation MAE")
 plt.show()
 
 #Save
-model.save("5k_prediction_model.keras")
+model.save("5k_prediction_rnn.keras")
 
 print("Model saved successfully.")
