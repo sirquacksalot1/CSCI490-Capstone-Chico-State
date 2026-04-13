@@ -1,7 +1,7 @@
 import pandas as pd
 import numpy as np
 
-# created with ChatGPT openAI
+#created with ChatGPT openAI
 
 def time_to_seconds(x):
     if pd.isna(x):
@@ -23,34 +23,15 @@ def time_to_seconds(x):
     except:
         return np.nan
 
-def extract_gender(event):
-    event = str(event)
-
-    if "Women" in event:
-        return 1
-    elif "Men" in event:
-        return 0
-    else:
-        return np.nan  # fallback (should rarely happen)
-
-# Load dataset
 df = pd.read_csv("LapSplits_5kResults_with_splits.csv")
 
-# Convert time columns
 cols = ["1000_split", "2000_split", "3000_split", "4000_split", "ResultTime"]
 
 for col in cols:
     df[col] = df[col].apply(time_to_seconds)
 
-df["gender"] = df["Event"].apply(extract_gender)
+df = df.dropna(subset=cols)
 
-# Drop rows with missing values (including gender)
-df = df.dropna(subset=cols + ["gender"])
-
-# Convert gender to int
-df["gender"] = df["gender"].astype(int)
-
-# Save cleaned dataset
 df.to_csv("LapSplits_5k_clean.csv", index=False)
 
-print("Saved cleaned dataset with gender column.")
+print("Saved cleaned dataset.")
